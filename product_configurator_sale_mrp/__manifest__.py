@@ -3,12 +3,12 @@
 
 {
     "name": "Product Configurator Sales Manufacturing",
-    "version": "15.0.1.0.0",
+    "version": "17.0.1.0.2",
     "category": "Manufacturing",
     "summary": "BOM Support for sales wizard",
-    "author": "Pledra, Odoo Community Association (OCA), Glo Networks",
+    "author": "Pledra, Odoo Community Association (OCA)",
     "license": "AGPL-3",
-    "website": "https://github.com/GlodoUK/product-configurator",
+    "website": "https://github.com/OCA/product-configurator",
     "depends": ["sale_mrp", "product_configurator_sale", "product_configurator_mrp"],
     "installable": True,
     "auto_install": True,

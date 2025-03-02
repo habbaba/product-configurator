@@ -1,17 +1,17 @@
 {
     "name": "Product Configurator",
-    "version": "15.0.1.0.0",
+    "version": "17.0.1.0.1",
     "category": "Generic Modules/Base",
     "summary": "Base for product configuration interface modules",
-    "author": "Pledra, Odoo Community Association (OCA), Glo Networks",
+    "author": "Pledra, Odoo Community Association (OCA)",
     "license": "AGPL-3",
-    "website": "https://github.com/GlodoUK/product-configurator",
-    "depends": ["account"],
+    "website": "https://github.com/OCA/product-configurator",
     "external_dependencies": {
         "python": [
-            "Mako",
+            "mako",
         ]
     },
+    "depends": ["account"],
     "data": [
         "security/configurator_security.xml",
         "security/ir.model.access.csv",
@@ -25,6 +25,16 @@
         "views/product_config_view.xml",
         "wizard/product_configurator_view.xml",
     ],
+    "assets": {
+        "web.assets_backend": [
+            "/product_configurator/static/src/scss/form_widget.scss",
+            "/product_configurator/static/src/js/form_widgets.esm.js",
+            "/product_configurator/static/src/js/boolean_button_widget.esm.js",
+            "/product_configurator/static/src/js/boolean_button_widget.xml",
+            "/product_configurator/static/src/js/kanban_widgets.esm.js",
+            "/product_configurator/static/src/js/list_widgest.esm.js",
+        ]
+    },
     "demo": [
         "demo/product_template.xml",
         "demo/product_attribute.xml",
@@ -35,18 +45,9 @@
     ],
     "images": ["static/description/cover.png"],
     "post_init_hook": "post_init_hook",
-    "qweb": ["static/xml/create_button.xml"],
     "development_status": "Beta",
     "maintainers": ["PCatinean"],
     "installable": True,
     "application": True,
     "auto_install": False,
-    "assets": {
-        "web.assets_backend": [
-            "product_configurator/static/scss/form_widget.scss",
-            "product_configurator/static/js/form_widgets.js",
-            "product_configurator/static/js/data_manager.js",
-            "product_configurator/static/js/relational_fields.js",
-        ]
-    },
 }

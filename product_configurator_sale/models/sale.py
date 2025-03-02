@@ -10,11 +10,13 @@ class SaleOrder(models.Model):
     def action_config_start(self):
         """Return action to start configuration wizard"""
         configurator_obj = self.env["product.configurator.sale"]
-        return configurator_obj.with_context(
+        ctx = dict(
+            self.env.context,
             default_order_id=self.id,
             wizard_model="product.configurator.sale",
             allow_preset_selection=True,
-        ).get_wizard_action()
+        )
+        return configurator_obj.with_context(**ctx).get_wizard_action()
 
 
 class SaleOrderLine(models.Model):
@@ -52,16 +54,37 @@ class SaleOrderLine(models.Model):
             model_name=wizard_model, extra_vals=extra_vals
         )
 
-    @api.onchange("product_uom", "product_uom_qty")
-    def product_uom_change(self):
-        if self.config_session_id:
-            account_tax_obj = self.env["account.tax"]
-            self.price_unit = account_tax_obj._fix_tax_included_price_company(
-                self.config_session_id.price,
-                self.product_id.taxes_id,
-                self.tax_id,
-                self.company_id,
-            )
-            return
+    @api.depends(
+        "config_session_id",
+        "tax_id",
+        "company_id",
+    )
+    def _compute_price_unit(self):
+        result = None
+        for line in self:
+            if line.config_session_id:
+                account_tax_obj = self.env["account.tax"]
+                line.price_unit = account_tax_obj._fix_tax_included_price_company(
+                    line.config_session_id.price,
+                    line.product_id.taxes_id,
+                    line.tax_id,
+                    line.company_id,
+                )
+            else:
+                result = super(SaleOrderLine, line)._compute_price_unit()
+        return result
 
-        return super(SaleOrderLine, self).product_uom_change()
+    def _get_sale_order_line_multiline_description_variants(self):
+        name = ""
+        for line in self:
+            custom_values = line.custom_value_ids
+            if custom_values:
+                name += "\n" + "\n".join(
+                    [f"{cv.display_name}: {cv.value}" for cv in custom_values]
+                )
+            else:
+                name += super(
+                    SaleOrderLine,
+                    line,
+                )._get_sale_order_line_multiline_description_variants()
+        return name

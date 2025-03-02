@@ -67,6 +67,7 @@ class ProductAttribute(models.Model):
     )
     description = fields.Text(translate=True)
     search_ok = fields.Boolean(
+        string="Searchable",
         help="When checking for variants with "
         "the same configuration, do we "
         "include this field in the search?",
@@ -78,7 +79,7 @@ class ProductAttribute(models.Model):
         "the template level",
     )
     multi = fields.Boolean(
-        help="Allow selection of multiple values for " "this attribute?",
+        help="Allow selection of multiple values for this attribute?",
     )
     uom_id = fields.Many2one(comodel_name="uom.uom", string="Unit of Measure")
     image = fields.Binary()
@@ -93,15 +94,14 @@ class ProductAttribute(models.Model):
             if attribute.custom_type in nosearch_fields and attribute.search_ok:
                 raise ValidationError(
                     _(
-                        "Selected custom field type '%(custom_type)s' is not"
-                        " searchable"
+                        "Selected custom field type '%s' is not searchable",
+                        attribute.custom_type,
                     )
-                    % {"custom_type": attribute.custom_type}
                 )
 
     def validate_custom_val(self, val):
         """Pass in a desired custom value and ensure it is valid.
-        Probaly should check type, etc, but let's assume fine for the moment.
+        Probably should check type, etc., but let's assume fine for the moment.
         """
         self.ensure_one()
         if self.custom_type in ("integer", "float"):
@@ -111,24 +111,29 @@ class ProductAttribute(models.Model):
             if minv and maxv and (val < minv or val > maxv):
                 raise ValidationError(
                     _(
-                        "Selected custom value '%(name)s' must be between"
-                        " %(min_val)s and %(max_val)s"
+                        "Selected custom value '%(name)s' must be "
+                        "between %(min_val)s and %(max_val)s",
+                        **{
+                            "name": self.name,
+                            "min_val": self.min_val,
+                            "max_val": self.max_val,
+                        },
                     )
-                    % {
-                        "name": self.name,
-                        "min_val": self.min_val,
-                        "max_val": self.max_val,
-                    }
                 )
             elif minv and val < minv:
                 raise ValidationError(
-                    _("Selected custom value '%(name)s' must be at least %(min_val)s")
-                    % {"name": self.name, "min_val": self.min_val}
+                    _(
+                        "Selected custom value '%(name)s' must be at least %(min_val)s",
+                        **{"name": self.name, "min_val": self.min_val},
+                    )
                 )
             elif maxv and val > maxv:
                 raise ValidationError(
-                    _("Selected custom value '%(name)s' must be lower than %(max_val)s")
-                    % {"name": self.name, "max_val": self.max_val + 1}
+                    _(
+                        "Selected custom value '%(name)s' "
+                        "must be lower than %(max_value)s",
+                        **{"name": self.name, "max_value": self.max_val + 1},
+                    )
                 )
 
     @api.constrains("min_val", "max_val")
@@ -143,6 +148,13 @@ class ProductAttribute(models.Model):
                 raise ValidationError(
                     _("Maximum value must be greater than Minimum value")
                 )
+
+    def _configurator_value_ids(self):
+        """Values accepted for attributes in `self`."""
+        values = self.value_ids
+        if any(self.mapped("val_custom")):
+            values += self.env["product.config.session"].get_custom_value_id()
+        return values
 
 
 class ProductAttributeLine(models.Model):
@@ -171,9 +183,7 @@ class ProductAttributeLine(models.Model):
     multi = fields.Boolean(
         help="Allow selection of multiple values for this attribute?",
     )
-    default_val = fields.Many2one(
-        comodel_name="product.attribute.value", string="Default Value"
-    )
+    default_val = fields.Many2one(comodel_name="product.attribute.value")
 
     sequence = fields.Integer(default=10)
 
@@ -181,17 +191,17 @@ class ProductAttributeLine(models.Model):
     def _check_default_values(self):
         """default value should not be outside of the
         values selected in attribute line"""
-        for line in self.filtered(lambda l: l.default_val):
+        for line in self.filtered(lambda line: line.default_val):
             if line.default_val not in line.value_ids:
                 raise ValidationError(
                     _(
                         "Default values for each attribute line must exist in "
-                        "the attribute values (%(attribute_name)s: %(default_name)s)"
+                        "the attribute values (%(attr_name)s: %(default_val)s)",
+                        **{
+                            "attr_name": line.attribute_id.name,
+                            "default_val": line.default_val.name,
+                        },
                     )
-                    % {
-                        "attribute_name": line.attribute_id.name,
-                        "default_name": line.default_val.name,
-                    }
                 )
 
     @api.constrains("active", "value_ids", "attribute_id")
@@ -206,29 +216,36 @@ class ProductAttributeLine(models.Model):
                 # Customization End
                 raise ValidationError(
                     _(
-                        "The attribute %(attribute_name)s must have at least one value for "
-                        "the product %(product_name)s."
+                        "The attribute %(attr)s must have at least one value for "
+                        "the product %(product)s.",
+                        **{
+                            "attr": ptal.attribute_id.display_name,
+                            "product": ptal.product_tmpl_id.display_name,
+                        },
                     )
-                    % {
-                        "attribute_name": ptal.attribute_id.display_name,
-                        "product_name": ptal.product_tmpl_id.display_name,
-                    }
                 )
             for pav in ptal.value_ids:
                 if pav.attribute_id != ptal.attribute_id:
                     raise ValidationError(
                         _(
-                            "On the product %(product_name)s you cannot associate the"
-                            " value %(value_name)s with the attribute"
-                            " %(attribute_name)s because they do not match."
+                            "On the product %(product)s you cannot associate the "
+                            "value %(value)s with the attribute %(attr)s because they "
+                            "do not match.",
+                            **{
+                                "product": ptal.product_tmpl_id.display_name,
+                                "value": pav.display_name,
+                                "attr": ptal.attribute_id.display_name,
+                            },
                         )
-                        % {
-                            "product_name": ptal.product_tmpl_id.display_name,
-                            "value_name": pav.display_name,
-                            "attribute_name": ptal.attribute_id.display_name,
-                        }
                     )
         return True
+
+    def _configurator_value_ids(self):
+        """Values accepted for template attribute lines in `self`."""
+        values = self.value_ids
+        if any(self.mapped("custom")):
+            values += self.env["product.config.session"].get_custom_value_id()
+        return values
 
 
 class ProductAttributeValue(models.Model):
@@ -240,7 +257,7 @@ class ProductAttributeValue(models.Model):
         if not default:
             default = {}
         default.update({"name": self.name + " (copy)"})
-        product = super(ProductAttributeValue, self).copy(default)
+        product = super().copy(default)
         return product
 
     active = fields.Boolean(
@@ -248,9 +265,7 @@ class ProductAttributeValue(models.Model):
         help="By unchecking the active field you can "
         "disable a attribute value without deleting it",
     )
-    product_id = fields.Many2one(
-        comodel_name="product.product", string="Related Product"
-    )
+    product_id = fields.Many2one(comodel_name="product.product")
     image = fields.Binary(
         attachment=True,
         help="Attribute value image (Display on website for radio buttons)",
@@ -268,7 +283,9 @@ class ProductAttributeValue(models.Model):
             [("id", "in", pt_attr_value_ids.ids), ("product_id", "!=", False)]
         )
         extra_prices = {
-            av.id: av.product_id.with_context(pricelist=pricelist.id).price
+            av.id: av.product_id.with_context(
+                pricelist=pricelist.id
+            )._get_contextual_price()
             for av in related_product_av_ids
         }
         remaining_av_ids = pt_attr_value_ids - related_product_av_ids
@@ -285,31 +302,21 @@ class ProductAttributeValue(models.Model):
             extra_prices[attr_val_id.id] += line.price_extra
         return extra_prices
 
-    def name_get(self):
-        res = super(ProductAttributeValue, self).name_get()
-        if not self._context.get("show_price_extra"):
+    def _compute_display_name(self):
+        # useless return to make pylint happy
+        res = super()._compute_display_name()
+        if not self.env.context.get("show_price_extra"):
             return res
         product_template_id = self.env.context.get("active_id", False)
-
         price_precision = self.env["decimal.precision"].precision_get("Product Price")
-        extra_prices = self.get_attribute_value_extra_prices(
-            product_tmpl_id=product_template_id, pt_attr_value_ids=self
-        )
-
-        res_prices = []
-        for val in res:
-            price_extra = extra_prices.get(val[0])
+        for attribute in self:
+            extra_prices = attribute.get_attribute_value_extra_prices(
+                product_tmpl_id=product_template_id, pt_attr_value_ids=attribute
+            )
+            price_extra = extra_prices.get(attribute.id)
             if price_extra:
-                val = (
-                    val[0],
-                    "%s ( +%s )"
-                    % (
-                        val[1],
-                        ("{0:,.%sf}" % (price_precision)).format(price_extra),
-                    ),
-                )
-            res_prices.append(val)
-        return res_prices
+                name = f"{attribute.name} ( +{price_extra:.{price_precision}f} )"
+                attribute.display_name = name
 
     @api.model
     def name_search(self, name="", args=None, operator="ilike", limit=100):
@@ -342,7 +349,7 @@ class ProductAttributeValue(models.Model):
             )
             new_args.append(("id", "in", val_ids))
             mono_tmpl_lines = product_tmpl.attribute_line_ids.filtered(
-                lambda l: not l.multi
+                lambda line: not line.multi
             )
             for line in mono_tmpl_lines:
                 line_val_ids = set(line.mapped("value_ids").ids)
@@ -351,9 +358,7 @@ class ProductAttributeValue(models.Model):
             if attr_restrict_ids:
                 new_args.append(("attribute_id", "not in", attr_restrict_ids))
             args = new_args
-        res = super(ProductAttributeValue, self).name_search(
-            name=name, args=args, operator=operator, limit=limit
-        )
+        res = super().name_search(name=name, args=args, operator=operator, limit=limit)
         return res
 
     # TODO: Prevent unlinking custom options by overriding unlink
@@ -386,7 +391,7 @@ class ProductAttributeValueLine(models.Model):
     )
     value_id = fields.Many2one(
         comodel_name="product.attribute.value",
-        required="True",
+        required=True,
         string="Attribute Value",
     )
     attribute_id = fields.Many2one(

@@ -1,7 +1,7 @@
 # Copyright (C) 2021 Open Source Integrators
 # License AGPL-3.0 or later (http://www.gnu.org/licenses/agpl).
 
-from odoo import fields, models
+from odoo import _, api, exceptions, fields, models
 
 
 class MrpProduction(models.Model):
@@ -23,14 +23,17 @@ class MrpProduction(models.Model):
         string="Custom Values",
     )
 
+    @api.model
     def action_config_start(self):
         """Return action to start configuration wizard"""
         configurator_obj = self.env["product.configurator.mrp"]
-        return configurator_obj.with_context(
+        ctx = dict(
+            self.env.context,
             wizard_id=None,
             wizard_model="product.configurator.mrp",
             allow_preset_selection=True,
-        ).get_wizard_action()
+        )
+        return configurator_obj.with_context(**ctx).get_wizard_action()
 
     def reconfigure_product(self):
         """Creates and launches a product configurator wizard with a linked
@@ -53,21 +56,84 @@ class MrpBom(models.Model):
         string="Configurable",
         readonly=True,
     )
+    scaffolding_bom = fields.Boolean(
+        string="Scaffolding BoM",
+        help="When checked, this BoM will serve as the main BoM used by the configurator to "
+        "create the product variant BoM’s. Only one BoM per product can be set as a Scaffolding BoM. "
+        "If no scaffolding BoM exists, the configurator will then look for a BoM that doesn’t have a "
+        "Product Variant to use.",
+    )
+    existing_scaffolding_bom = fields.Boolean(
+        string="Existing Scaffolding BoM",
+        compute="_compute_existing_scaffolding_bom",
+        store=True,
+    )
 
-    def _set_bom_sequences(self, product_tmpl_id=None):
-        # Set BoM Sequences. For MO, Odoo will look for the first BoM to use, which is
-        # usually the Master BoM without a variant. Setting the Master BoM sequence
-        # higher will ensure Odoo doesn't use the master BoM when it should use
-        # variant's BoM
-        related_boms = self.env["mrp.bom"].search(
-            [("product_tmpl_id", "=", product_tmpl_id.id)]
-        )
-        if related_boms:
-            for bom in related_boms:
-                if bom.product_id and bom.sequence == 0:
-                    bom.write({"sequence": 1})
-                elif not bom.product_id:
-                    bom.write({"sequence": len(related_boms)})
+    @api.model
+    def default_get(self, val_list):
+        result = super().default_get(val_list)
+        if result.get("product_tmpl_id"):
+            product_tmpl_id = self.env["product.template"].browse(
+                result.get("product_tmpl_id")
+            )
+            result["company_id"] = (
+                product_tmpl_id and product_tmpl_id.company_id.id or False
+            )
+        return result
+
+    @api.depends("code", "scaffolding_bom")
+    def _compute_display_name(self):
+        super()._compute_display_name()
+        for bom in self:
+            if bom.scaffolding_bom:
+                bom.display_name = bom.display_name + "(" + "Scaffold" + ")"
+
+    @api.constrains("product_tmpl_id", "scaffolding_bom")
+    def _check_product_tmpl_scaffolding_bom(self):
+        """Constraint ensures only one scaffolding BoM exists per product template"""
+        for rec in self:
+            if (
+                self.search_count(
+                    [
+                        ("scaffolding_bom", "=", True),
+                        ("product_tmpl_id", "=", rec.product_tmpl_id.id),
+                    ]
+                )
+                > 1
+            ):
+                raise exceptions.ValidationError(
+                    _(
+                        "You can only have one unarchived Scaffolding BOM for a configurable product."
+                    )
+                )
+
+    @api.depends("scaffolding_bom", "active", "product_tmpl_id")
+    def _compute_existing_scaffolding_bom(self):
+        for rec in self:
+            domain = [
+                ("scaffolding_bom", "=", True),
+                ("active", "=", True),
+                ("product_tmpl_id", "=", rec.product_tmpl_id.id),
+                ("product_id", "=", False),
+            ]
+
+            # Only add the id condition if the record has an actual id (i.e., not a new record)
+            if rec.id:
+                domain.append(("id", "!=", rec.id))
+
+            if self.search_count(domain) >= 1:
+                rec.existing_scaffolding_bom = True
+            else:
+                rec.existing_scaffolding_bom = False
+
+    @api.onchange("product_id")
+    def onchange_scaffolding_bom_product_id(self):
+        """onchange method to automatically set 'scaffolding_bom'
+        based on 'product_id'."""
+        if self.product_id:
+            self.scaffolding_bom = False
+        else:
+            self.scaffolding_bom = True
 
 
 class MrpBomLine(models.Model):

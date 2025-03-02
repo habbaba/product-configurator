@@ -19,13 +19,13 @@ class ProductTemplate(models.Model):
         1 as many views and methods trigger only when a template has at least
         one variant attached. Since we create them from the template we should
         have access to them always"""
-        res = super(ProductTemplate, self)._compute_product_variant_count()
+        result = super()._compute_product_variant_count()
         for product_tmpl in self:
             config_ok = product_tmpl.config_ok
             variant_count = product_tmpl.product_variant_count
             if config_ok and not variant_count:
                 product_tmpl.product_variant_count = 1
-        return res
+        return result
 
     @api.depends("attribute_line_ids.value_ids")
     def _compute_template_attr_vals(self):
@@ -70,7 +70,7 @@ class ProductTemplate(models.Model):
             ]
             if len(set(attr_val_line_vals)) != len(attr_val_line_vals):
                 raise ValidationError(
-                    _("You cannot have a duplicate configuration for the " "same value")
+                    _("You cannot have a duplicate configuration for the same value")
                 )
 
     config_ok = fields.Boolean(string="Can be Configured")
@@ -115,13 +115,20 @@ class ProductTemplate(models.Model):
         copy=True,
     )
 
+    # We are calculating weight of variants based on weight of
+    # product-template so that no need of compute and inverse on this
+    weight = fields.Float(
+        compute="_compute_weight",
+        inverse="_set_weight",  # pylint: disable=C8110
+        search="_search_weight",
+        store=False,
+    )
     weight_dummy = fields.Float(
         string="Manual Weight",
         digits="Stock Weight",
         help="Manual setting of product template weight",
     )
 
-    @api.depends("weight_dummy", "product_variant_ids", "product_variant_ids.weight")
     def _compute_weight(self):
         config_products = self.filtered(lambda template: template.config_ok)
         for product in config_products:
@@ -129,16 +136,19 @@ class ProductTemplate(models.Model):
         standard_products = self - config_products
         return super(ProductTemplate, standard_products)._compute_weight()
 
-    # pylint:disable=missing-return
     def _set_weight(self):
         for product_tmpl in self:
             product_tmpl.weight_dummy = product_tmpl.weight
             if not product_tmpl.config_ok:
                 super(ProductTemplate, product_tmpl)._set_weight()
+        return
+
+    def _search_weight(self, operator, value):
+        return [("weight_dummy", operator, value)]
 
     def _check_default_values(self):
         default_val_ids = (
-            self.attribute_line_ids.filtered(lambda l: l.default_val)
+            self.attribute_line_ids.filtered(lambda line: line.default_val)
             .mapped("default_val")
             .ids
         )
@@ -148,27 +158,27 @@ class ProductTemplate(models.Model):
             cfg_session_obj.validate_configuration(
                 value_ids=default_val_ids, product_tmpl_id=self.id, final=False
             )
-        except ValidationError as ex:
-            raise ValidationError(ex.name) from ex
-        except Exception as ex:
+        except ValidationError as exc:
+            raise ValidationError(exc.args[0]) from exc
+        except Exception as exc:
             raise ValidationError(
                 _("Default values provided generate an invalid configuration")
-            ) from ex
+            ) from exc
 
     @api.constrains("config_line_ids", "attribute_line_ids")
     def _check_default_value_domains(self):
         for template in self:
             try:
                 template._check_default_values()
-            except ValidationError as e:
+            except ValidationError as exc:
                 raise ValidationError(
                     _(
                         "Restrictions added make the current default values "
                         "generate an invalid configuration.\
                       \n%s"
                     )
-                    % (e.name)
-                ) from e
+                    % (exc.args[0])
+                ) from exc
 
     def toggle_config(self):
         for record in self:
@@ -195,7 +205,7 @@ class ProductTemplate(models.Model):
             )
             if variant_unlink:
                 self -= config_template
-        res = super(ProductTemplate, self).unlink()
+        res = super().unlink()
         return res
 
     def copy(self, default=None):
@@ -204,7 +214,7 @@ class ProductTemplate(models.Model):
         if not default:
             default = {}
         self = self.with_context(check_constraint=False)
-        res = super(ProductTemplate, self).copy(default=default)
+        res = super().copy(default=default)
 
         # Attribute lines
         attribute_line_dict = {}
@@ -308,13 +318,14 @@ class ProductTemplate(models.Model):
             )
         )
 
-    @api.model
-    def create(self, vals):
+    @api.model_create_multi
+    def create(self, vals_list):
         """Patch for check access rights of user(configurable products)"""
-        config_ok = vals.get("config_ok", False)
-        if config_ok:
-            self.check_config_user_access()
-        return super(ProductTemplate, self).create(vals)
+        for vals in vals_list:
+            config_ok = vals.get("config_ok", False)
+            if config_ok:
+                self.check_config_user_access()
+        return super().create(vals_list)
 
     def write(self, vals):
         """Patch for check access rights of user(configurable products)"""
@@ -323,12 +334,12 @@ class ProductTemplate(models.Model):
         if change_config_ok or configurable_templates:
             self[:1].check_config_user_access()
 
-        return super(ProductTemplate, self).write(vals)
+        return super().write(vals)
 
     @api.constrains("config_line_ids")
     def _check_config_line_domain(self):
         attribute_line_ids = self.attribute_line_ids
-        tmpl_value_ids = attribute_line_ids.mapped("value_ids")
+        tmpl_value_ids = attribute_line_ids._configurator_value_ids()
         tmpl_attribute_ids = attribute_line_ids.mapped("attribute_id")
         error_message = False
         for domain_id in self.config_line_ids.mapped("domain_id"):
@@ -336,7 +347,7 @@ class ProductTemplate(models.Model):
             domain_value_ids = domain_id.domain_line_ids.mapped("value_ids")
             invalid_value_ids = domain_value_ids - tmpl_value_ids
             invalid_attribute_ids = domain_attr_ids - tmpl_attribute_ids
-            if not invalid_value_ids and not invalid_value_ids:
+            if not invalid_attribute_ids and not invalid_value_ids:
                 continue
             if not error_message:
                 error_message = _(
@@ -344,35 +355,26 @@ class ProductTemplate(models.Model):
                     "are not present in template attributes/values. "
                     "Please make sure you are adding right restriction"
                 )
-            error_message += _("\nRestriction: %s") % (domain_id.name)
+            error_message += _("\nRestriction: %s", domain_id.name)
             error_message += (
                 invalid_attribute_ids
-                and _("\nAttribute/s: %s")
-                % (", ".join(invalid_attribute_ids.mapped("name")))
+                and _(
+                    "\nAttribute/s: %s", ", ".join(invalid_attribute_ids.mapped("name"))
+                )
                 or ""
             )
             error_message += (
                 invalid_value_ids
-                and _("\nValue/s: %s\n") % (", ".join(invalid_value_ids.mapped("name")))
+                and _("\nValue/s: %s\n", ", ".join(invalid_value_ids.mapped("name")))
                 or ""
             )
         if error_message:
             raise ValidationError(error_message)
 
-    @api.model
-    def name_search(self, name="", args=None, operator="ilike", limit=100):
-        domain = args or []
-        domain += ["|", ("name", operator, name), ("default_code", operator, name)]
-        return self.search(domain, limit=limit).name_get()
-
 
 class ProductProduct(models.Model):
     _inherit = "product.product"
     _rec_name = "config_name"
-
-    def _get_conversions_dict(self):
-        conversions = {"float": float, "integer": int}
-        return conversions
 
     @api.constrains("product_template_attribute_value_ids")
     def _check_duplicate_product(self):
@@ -394,7 +396,7 @@ class ProductProduct(models.Model):
             duplicates = config_session_obj.search_variant(
                 product_tmpl_id=product.product_tmpl_id,
                 value_ids=ptav_ids.ids,
-            ).filtered(lambda p: p.id != product.id)
+            ).filtered(lambda p, product=product: p.id != product.id)
 
             if duplicates:
                 raise ValidationError(
@@ -450,7 +452,6 @@ class ProductProduct(models.Model):
                 product.mapped("product_template_attribute_value_ids.weight_extra")
             )
 
-    @api.depends("weight_dummy", "weight_extra", "product_tmpl_id.weight")
     def _compute_product_weight(self):
         for product in self:
             if product.config_ok:
@@ -459,6 +460,9 @@ class ProductProduct(models.Model):
             else:
                 product.weight = product.weight_dummy
 
+    def _search_product_weight(self, operator, value):
+        return [("weight_dummy", operator, value)]
+
     def _inverse_product_weight(self):
         """Store weight in dummy field"""
         self.weight_dummy = self.weight
@@ -466,12 +470,13 @@ class ProductProduct(models.Model):
     config_name = fields.Char(
         string="Configuration Name", compute="_compute_config_name"
     )
-    weight_extra = fields.Float(compute="_compute_product_weight_extra", store=True)
+    weight_extra = fields.Float(compute="_compute_product_weight_extra")
     weight_dummy = fields.Float(string="Manual Weight", digits="Stock Weight")
     weight = fields.Float(
         compute="_compute_product_weight",
         inverse="_inverse_product_weight",
-        store=True,
+        search="_search_product_weight",
+        store=False,
     )
 
     # product preset
@@ -532,15 +537,16 @@ class ProductProduct(models.Model):
             self.env["product.product"].check_config_user_access(mode="delete")
         ctx = dict(self.env.context, unlink_from_variant=True)
         self.env.context = ctx
-        return super(ProductProduct, self).unlink()
+        return super().unlink()
 
-    @api.model
-    def create(self, vals):
+    @api.model_create_multi
+    def create(self, vals_list):
         """Patch for check access rights of user(configurable products)"""
-        config_ok = vals.get("config_ok", False)
-        if config_ok:
-            self.check_config_user_access(mode="create")
-        return super(ProductProduct, self).create(vals)
+        for vals in vals_list:
+            config_ok = vals.get("config_ok", False)
+            if config_ok:
+                self.check_config_user_access(mode="create")
+        return super().create(vals_list)
 
     def write(self, vals):
         """Patch for check access rights of user(configurable products)"""
@@ -549,14 +555,17 @@ class ProductProduct(models.Model):
         if change_config_ok or configurable_products:
             self[:1].check_config_user_access(mode="write")
 
-        return super(ProductProduct, self).write(vals)
+        return super().write(vals)
 
-    # pylint:disable=missing-return
     def _compute_product_price_extra(self):
         standard_products = self.filtered(lambda product: not product.config_ok)
         config_products = self - standard_products
         if standard_products:
-            super(ProductProduct, standard_products)._compute_product_price_extra()
+            result = super(
+                ProductProduct, standard_products
+            )._compute_product_price_extra()
+        else:
+            result = None
         for product in config_products:
             attribute_value_obj = self.env["product.attribute.value"]
             value_ids = (
@@ -566,3 +575,4 @@ class ProductProduct(models.Model):
                 product_tmpl_id=product.product_tmpl_id.id, pt_attr_value_ids=value_ids
             )
             product.price_extra = sum(extra_prices.values())
+        return result

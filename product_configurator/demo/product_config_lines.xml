@@ -64,5 +64,4 @@
         <field name="domain_id" ref="product_config_domain_luxury_lines" />
     </record>
 
-
 </odoo>
